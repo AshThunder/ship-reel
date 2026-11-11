@@ -5,7 +5,8 @@ import logging
 import shutil
 from pathlib import Path
 
-from . import schemas, tools
+from . import hooks, schemas, tools
+from .engine import netguard
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +18,10 @@ def _ffmpeg_available() -> bool:
 
 
 def register(ctx):
+    # User-only opt-in for recording local/private hosts (plugins.entries.ship-reel.settings).
+    if hasattr(ctx, "get_config"):
+        netguard.set_setting_reader(lambda: ctx.get_config("allow_private_hosts", False))
+    ctx.register_hook("pre_tool_call", hooks.pre_tool_call)
     for schema in schemas.ALL:
         name = schema["name"]
         kwargs = {}

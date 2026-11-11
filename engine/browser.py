@@ -19,7 +19,8 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlparse
 
-from .plan import RISKY_RE
+from . import netguard
+from .plan import PASSWORD_RE, RISKY_RE
 
 VIEWPORT = (1440, 810)
 DPR = 2
@@ -93,9 +94,14 @@ def run_isolated(fn: Callable[[], Any], timeout: float = 900) -> Any:
     return box.get("value")
 
 
-def _launch(p):
+def _launch(p, proxy: str | None = None):
+    kw: dict[str, Any] = {}
+    if proxy:
+        # "<-loopback>" stops Chromium's implicit direct connection to localhost, so loopback
+        # traffic goes through the filtering proxy like everything else.
+        kw["proxy"] = {"server": proxy, "bypass": "<-loopback>"}
     try:
-        return p.chromium.launch(headless=True, args=["--hide-scrollbars", "--force-color-profile=srgb"])
+        return p.chromium.launch(headless=True, args=["--hide-scrollbars", "--force-color-profile=srgb"], **kw)
     except Exception as exc:  # browser binary missing
         msg = str(exc)
         if "Executable doesn't exist" in msg or "playwright install" in msg:
@@ -447,8 +453,10 @@ class Driver:
             text = (el.inner_text(timeout=800) or "")[:80]
         except Exception:
             pass
-        if text and not step.get("_allow_risky") and RISKY_RE.search(text):
-            raise StepFailed(f"matched element reads {text!r}, which looks like an account or payment action; skipped")
+        if text and not step.get("risky") and RISKY_RE.search(text):
+            # Only steps flagged risky at plan time went through the user's Hermes approval prompt.
+            raise StepFailed(f"matched element reads {text!r}, which looks like an account or payment action "
+                             "that was not approved; skipped")
         try:
             el.evaluate("e => { const a = e.closest('a'); if (a) a.removeAttribute('target'); }")
         except Exception:
@@ -522,7 +530,8 @@ class Driver:
         info: dict[str, Any] = {}
         if a == "navigate":
             t0 = time.time()
-            self.page.goto(step["url"], wait_until="domcontentloaded", timeout=30000)
+            netguard.check_url(step["url"])
+            check_blocked_response(self.page.goto(step["url"], wait_until="domcontentloaded", timeout=30000), step["url"])
             self.settle()
             if self.cast:
                 self.cast.restart()
@@ -542,6 +551,8 @@ class Driver:
             info = {"strategy": strategy, "focus": [x, y]}
         elif a == "type":
             strategy, el, _ = self.resolve(step["target"], skip)
+            if _is_secret_field(el):
+                raise StepFailed("target is a password field; Ship Reel never types credentials")
             bb = self.bring_into_view(el)
             x, y = self.point_in(bb)
             self.move_cursor(x, y)
@@ -550,6 +561,8 @@ class Driver:
             self.page.mouse.click(x, y)
             self.clicks.append({"t": round(t, 4), "x": round(x, 1), "y": round(y, 1)})
             self.sleep(0.25)
+            if _focused_is_secret(self.page):
+                raise StepFailed("focus landed on a password field; Ship Reel never types credentials")
             t0 = time.time()
             for ch in step["value"]:
                 self.page.keyboard.type(ch)
@@ -607,7 +620,6 @@ class Driver:
     def run_plan(self, plan: dict[str, Any], on_progress: Callable[[str], None] | None = None) -> list[dict[str, Any]]:
         results = []
         for i, step in enumerate(plan["steps"]):
-            step = {**step, "_allow_risky": plan.get("allow_risky", False)}
             res: dict[str, Any] = {"index": i, "action": step["action"], "caption": step["caption"], "attempts": 0}
             res["t_start"] = round(time.time(), 4)
             last_err = None
@@ -639,18 +651,78 @@ class Driver:
         return results
 
 
+_SECRET_JS = """e => {
+  if (!e) return false;
+  const t = (e.getAttribute && (e.getAttribute('type') || '')).toLowerCase();
+  const ac = (e.getAttribute && (e.getAttribute('autocomplete') || '')).toLowerCase();
+  return t === 'password' || (e.type || '').toLowerCase() === 'password' || /password/.test(ac);
+}"""
+
+
+def _is_secret_field(el) -> bool:
+    """True if the resolved element (or the input a <label> points at) is a password field."""
+    try:
+        return bool(el.evaluate("e => { const f = " + _SECRET_JS + "; "
+                                "return f(e) || f(e.control || null) || f(e.querySelector && e.querySelector('input')); }"))
+    except Exception:  # noqa: BLE001 - if we cannot tell, refuse
+        return True
+
+
+def _focused_is_secret(page) -> bool:
+    try:
+        return bool(page.evaluate("() => (" + _SECRET_JS + ")(document.activeElement)"))
+    except Exception:  # noqa: BLE001
+        return True
+
+
+class _Net:
+    """Network guard for one browser: route filter + filtering proxy (see engine/netguard.py)."""
+
+    def __init__(self) -> None:
+        self.guard = netguard.HostGuard()
+        self.proxy = None if self.guard.allow_all else netguard.FilterProxy()
+
+    def close(self) -> None:
+        if self.proxy:
+            self.proxy.close()
+
+    def goto(self, page, url: str) -> None:
+        try:
+            resp = page.goto(url, wait_until="domcontentloaded", timeout=30000)
+        except Exception as exc:  # noqa: BLE001
+            raise self.guard.explain(exc) from exc
+        check_blocked_response(resp, url)
+
+
+def check_blocked_response(resp, url: str) -> None:
+    """A redirect into a blocked range comes back as the filtering proxy's 403 page."""
+    try:
+        blocked = resp is not None and resp.status == 403 and bool(resp.headers.get(netguard.FilterProxy.BLOCK_HEADER.lower()))
+    except Exception:  # noqa: BLE001
+        blocked = False
+    if blocked:
+        raise netguard.BlockedHost(f"{url} redirected to a private, local or reserved address; Ship Reel only records public pages")
+
+
 def _new_page(p):
-    browser = _launch(p)
+    net = _Net()
+    try:
+        browser = _launch(p, net.proxy.server if net.proxy else None)
+    except Exception:
+        net.close()
+        raise
     ctx = browser.new_context(
         viewport={"width": VIEWPORT[0], "height": VIEWPORT[1]},
         device_scale_factor=DPR,
         user_agent=UA,
         locale="en-US",
         color_scheme="light",
+        service_workers="block",  # service workers would bypass the route filter
     )
+    net.guard.install(ctx)
     page = ctx.new_page()
     page.on("popup", lambda pop: pop.close())
-    return browser, ctx, page
+    return browser, ctx, page, net
 
 
 def probe(plan: dict[str, Any]) -> dict[str, Any]:
@@ -659,9 +731,9 @@ def probe(plan: dict[str, Any]) -> dict[str, Any]:
 
     def work():
         with sync_playwright() as p:
-            browser, ctx, page = _new_page(p)
+            browser, ctx, page, net = _new_page(p)
             try:
-                page.goto(plan["url"], wait_until="domcontentloaded", timeout=30000)
+                net.goto(page, plan["url"])
                 d = Driver(page, ctx, mode="dry")
                 d.settle()
                 closed = d.dismiss_overlays()
@@ -670,6 +742,7 @@ def probe(plan: dict[str, Any]) -> dict[str, Any]:
                 return {"inventory": inv, "overlays_closed": closed, "results": results, "final_url": page.url}
             finally:
                 browser.close()
+                net.close()
 
     return run_isolated(work, timeout=300)
 
@@ -686,9 +759,9 @@ def record(plan: dict[str, Any], capture_dir: Path, on_progress: Callable[[str],
 
     def work():
         with sync_playwright() as p:
-            browser, ctx, page = _new_page(p)
+            browser, ctx, page, net = _new_page(p)
             try:
-                page.goto(plan["url"], wait_until="domcontentloaded", timeout=30000)
+                net.goto(page, plan["url"])
                 d = Driver(page, ctx, mode="record", capture_dir=frames_dir)
                 d.settle(max_idle=6)
                 d.dismiss_overlays()
@@ -727,5 +800,6 @@ def record(plan: dict[str, Any], capture_dir: Path, on_progress: Callable[[str],
                 return events
             finally:
                 browser.close()
+                net.close()
 
     return run_isolated(work, timeout=900)

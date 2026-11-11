@@ -78,7 +78,6 @@ def plan_reel(args: dict[str, Any], **kwargs: Any) -> str:
         "steps": args.get("steps") or [],
         "title": args.get("title"),
         "tagline": args.get("tagline") or brief,
-        "allow_risky": bool(args.get("allow_risky")),
     }
     auto = False
     if not raw["steps"]:

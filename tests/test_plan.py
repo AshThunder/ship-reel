@@ -22,15 +22,21 @@ def test_normalize_basic_and_aliases():
     assert plan["steps"][2]["amount"] == 0.75
 
 
-def test_risky_clicks_refused_unless_allowed():
-    for target in ("Buy now", "Sign up", "Connect wallet", "Log in", "Delete project", "Checkout"):
-        with pytest.raises(P.PlanError):
-            P.normalize_plan({"url": "https://x.dev", "steps": [{"action": "click", "target": target}]})
+def test_risky_clicks_flagged_not_model_approvable():
+    for target in ("Buy now", "Sign up", "Connect wallet", "Log in", "Delete project", "Checkout", "Send"):
+        plan, warns = P.normalize_plan({"url": "https://x.dev", "steps": [{"action": "click", "target": target, "caption": "x"}]})
+        assert plan["steps"][0]["risky"] is True and any("approve" in w for w in warns)
+    # a model-supplied allow_risky / risky flag has no effect on safe steps and is not echoed
     plan, _ = P.normalize_plan({"url": "https://x.dev", "allow_risky": True,
-                                "steps": [{"action": "click", "target": "Sign up", "caption": "x"}]})
-    assert plan["steps"][0]["target"] == "Sign up"
-    # ordinary words are fine
-    P.normalize_plan({"url": "https://x.dev", "steps": [{"action": "click", "target": "Blog posts", "caption": "x"}]})
+                                "steps": [{"action": "click", "target": "Blog posts", "caption": "x", "risky": True}]})
+    assert "allow_risky" not in plan and "risky" not in plan["steps"][0]
+
+
+def test_password_type_refused():
+    for target in ("Password", "css=input[type=password]", "css=input[type='password']", "label=Passcode",
+                   "css=#current-password"):
+        with pytest.raises(P.PlanError, match="never enters"):
+            P.normalize_plan({"url": "https://x.dev", "steps": [{"action": "type", "target": target, "value": "x"}]})
 
 
 def test_captions_are_clean():

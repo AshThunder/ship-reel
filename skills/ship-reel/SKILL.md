@@ -31,9 +31,12 @@ Shot list rules that make reels look professional:
 - Set `title` and `tagline` for the title card; `cta_url` for the end card if it differs.
 - If a click starts a one-off or rate-limited action, pass `dry_run: false` so it only runs once, while recording.
 
-Ship Reel is read-only by design: it refuses to click sign-up, login, payment,
-submit, delete or wallet controls. Only pass `allow_risky: true` when the user
-explicitly asked for that exact action.
+Ship Reel is read-only by design. Avoid sign-up, login, payment, send, submit,
+delete or wallet controls. If the user explicitly asked for one, include it: Hermes
+will show the user an approval prompt before the browser clicks it, and if they
+decline the call is blocked. Never type into password fields (refused), and only
+use public URLs: localhost and private-network addresses are refused unless the
+user has turned on the `allow_private_hosts` setting themselves.
 
 ## 2. Record (record_reel)
 

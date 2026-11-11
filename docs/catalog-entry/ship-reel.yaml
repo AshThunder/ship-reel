@@ -3,7 +3,7 @@
 name: ship-reel
 repo: https://github.com/AshThunder/ship-reel
 sha: "0000000000000000000000000000000000000000"
-version: "0.2.0"
+version: "0.2.1"
 category: tools
 author: Chris Gold
 license: MIT
@@ -22,11 +22,13 @@ provides_tools:
   - list_reels
   - reel_status
   - draft_post
+provides_hooks:
+  - pre_tool_call
 requires_env: []
 disclosures:
-  network: Opens the user-supplied URL and pages in its shot list in headless Chromium. With the optional voice-over extra installed, downloads the Kokoro TTS model once from GitHub (SHA-256 pinned). No telemetry.
+  network: Opens the user-supplied URL and pages in its shot list in headless Chromium. Public hosts only; loopback, private, link-local/metadata, CGNAT and reserved addresses are refused for every URL and every browser request (route filter plus a local filtering proxy) unless the user sets allow_private_hosts / SHIPREEL_ALLOW_PRIVATE_HOSTS=1. With the optional voice-over extra installed, downloads the Kokoro TTS model once from GitHub (SHA-256 pinned). No telemetry.
   subprocess: Runs ffmpeg/ffprobe and local render worker processes.
   filesystem: Writes only to the plugin data directory (or SHIP_REEL_HOME), including the optional voice model.
   bundled_assets: Inter font (OFL) and a procedurally generated music bed (MIT); no binaries.
-  browser_actions: Refuses sign-up, login, payment, submit, delete and wallet clicks unless allow_risky is set; never enters credentials.
+  browser_actions: Clicks on sign-up, login, payment, send, submit, delete and wallet controls trigger a pre_tool_call approve prompt for the user; the model cannot approve them. Typing into password fields is refused.
   publishing: None. draft_post returns text only.

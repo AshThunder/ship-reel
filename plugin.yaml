@@ -1,5 +1,5 @@
 name: ship-reel
-version: 0.2.0
+version: 0.2.1
 manifest_version: 2
 api_version: 1
 description: Turn a URL and a one-line brief into a polished, captioned product demo reel for X, recorded, edited and verified by Hermes.
@@ -17,3 +17,10 @@ provides_tools:
   - list_reels
   - reel_status
   - draft_post
+provides_hooks:
+  - pre_tool_call
+config_schema:
+  allow_private_hosts:
+    type: bool
+    default: false
+    description: "Let Ship Reel open localhost, private-network and other non-public addresses (for recording a local dev server). Off by default. Same as SHIPREEL_ALLOW_PRIVATE_HOSTS=1."

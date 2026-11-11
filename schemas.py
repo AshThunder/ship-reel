@@ -32,19 +32,20 @@ PLAN_REEL = {
         "The tool validates and normalises the steps, then dry-runs them in headless Chromium to confirm "
         "every target resolves. Without steps it inspects the page and drafts a plan you should refine. "
         "Returns a job_id, the plan, dry-run results and the page's headings and clickable labels. "
-        "Read-only: clicks on payment, sign-up, login, submit or delete controls are refused."
+        "Public pages only: local, private-network and cloud-metadata addresses are refused. Clicks on payment, "
+        "sign-in, send, submit or delete controls need the user's approval (Hermes asks them), and typing into "
+        "password fields is always refused."
     ),
     "parameters": {
         "type": "object",
         "properties": {
-            "url": {"type": "string", "description": "Public http(s) URL to start from"},
+            "url": {"type": "string", "description": "Public http(s) URL to start from (no localhost or private-network hosts)"},
             "brief": {"type": "string", "description": "What the reel should show, in a sentence or two"},
             "steps": {"type": "array", "items": _STEP, "description": "Shot list (5-8 steps reads best). Omit to get a draft."},
             "title": {"type": "string", "description": "Product name for the title card"},
             "tagline": {"type": "string", "description": "One line under the title"},
             "cta_url": {"type": "string", "description": "URL shown on the end card (defaults to url)"},
             "job_id": {"type": "string", "description": "Re-plan an existing job instead of creating a new one"},
-            "allow_risky": {"type": "boolean", "description": "Only if the user explicitly asked to click account or payment controls"},
             "dry_run": {"type": "boolean", "description": "Dry-run the steps after validating (default true). Set false when a click starts a one-off or rate-limited action, so it only runs once while recording."},
         },
         "required": ["url", "brief"],

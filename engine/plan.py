@@ -6,6 +6,8 @@ import unicodedata
 from typing import Any
 from urllib.parse import urlparse
 
+from . import netguard
+
 ACTIONS = ("navigate", "click", "type", "scroll", "hover", "wait", "press")
 ZOOM_DEFAULT = {"click": True, "type": True, "hover": True}
 MAX_STEPS = 12
@@ -13,15 +15,20 @@ MIN_STEPS = 1
 CAPTION_MAX = 72
 TARGET_REEL_SECONDS = 80.0
 
-# Clicks whose target text matches this are refused unless allow_risky is set:
-# Ship Reel records public, read-only walkthroughs and must never pay, sign up,
-# submit, delete or post on the user's behalf.
+# Clicks whose target text matches this are "risky": Ship Reel records public, read-only
+# walkthroughs and must never pay, sign up, submit, delete or post on the user's behalf without
+# the user saying so. Risky steps are flagged in the plan and the plugin's pre_tool_call hook asks
+# the user to approve them through Hermes' approval prompt (see hooks.py). The model cannot
+# approve them itself.
 RISKY_RE = re.compile(
     r"\b(buy|pay|purchase|checkout|check out|order now|subscribe|sign ?up|register|"
     r"create account|log ?in|sign ?in|submit|send|delete|remove|confirm|donate|"
     r"transfer|withdraw|deposit|connect wallet|approve|publish|post now)\b",
     re.I,
 )
+
+# type steps aimed at password fields are always refused: Ship Reel never enters credentials.
+PASSWORD_RE = re.compile(r"pass ?(word|wd|code|phrase)|current-password|new-password", re.I)
 
 _ALIASES = {
     "goto": "navigate", "open": "navigate", "visit": "navigate", "go": "navigate",
@@ -82,7 +89,22 @@ def check_url(url: str) -> str:
     p = urlparse(url)
     if p.scheme not in ("http", "https") or not p.netloc:
         raise PlanError(f"url must be an http(s) address, got {url!r}")
+    try:
+        netguard.check_url(url)
+    except netguard.BlockedHost as exc:
+        raise PlanError(str(exc)) from exc
     return url
+
+
+def is_risky(step: dict[str, Any]) -> bool:
+    """A click whose target reads like a payment, sign-in, send, submit or delete control."""
+    return step.get("action") == "click" and bool(step.get("risky") or RISKY_RE.search(str(step.get("target") or "")))
+
+
+def risky_steps(steps: list[dict[str, Any]]) -> list[str]:
+    """Human-readable list of the risky steps in a plan, for the approval prompt."""
+    return [f"step {i + 1}: click {s.get('target')!r}" for i, s in enumerate(steps or [])
+            if isinstance(s, dict) and is_risky(s)]
 
 
 def _num(v: Any, default: float, lo: float, hi: float) -> float:
@@ -107,7 +129,7 @@ def _auto_caption(step: dict[str, Any]) -> str:
     return ""
 
 
-def normalize_step(raw: Any, index: int, allow_risky: bool = False) -> tuple[dict[str, Any], list[str]]:
+def normalize_step(raw: Any, index: int) -> tuple[dict[str, Any], list[str]]:
     """Return (step, warnings). Raises PlanError for unusable steps."""
     warnings: list[str] = []
     if isinstance(raw, str):
@@ -133,12 +155,13 @@ def normalize_step(raw: Any, index: int, allow_risky: bool = False) -> tuple[dic
             if value is None or str(value) == "":
                 raise PlanError(f"step {index + 1}: type needs a value")
             step["value"] = str(value)[:200]
-        if action == "click" and not allow_risky and RISKY_RE.search(target):
-            raise PlanError(
-                f"step {index + 1}: refusing to click {target!r}; it looks like a payment, sign-up, "
-                "submit or account action. Ship Reel records read-only walkthroughs. "
-                "Pass allow_risky=true only if the user explicitly asked for it."
-            )
+            if PASSWORD_RE.search(target) or re.search(r"type\s*=\s*['\"]?password", target, re.I):
+                raise PlanError(f"step {index + 1}: refusing to type into {target!r}; Ship Reel never enters passwords or credentials")
+        if action == "click" and RISKY_RE.search(target):
+            step["risky"] = True
+            warnings.append(
+                f"step {index + 1}: clicking {target!r} looks like a payment, sign-in, send, submit or delete action; "
+                "Hermes will ask the user to approve it before the browser runs it")
     elif action == "scroll":
         if target:
             step["target"] = target
@@ -151,7 +174,7 @@ def normalize_step(raw: Any, index: int, allow_risky: bool = False) -> tuple[dic
         key = str(raw.get("key") or raw.get("value") or target or "").strip()
         if not key:
             raise PlanError(f"step {index + 1}: press needs a key")
-        if key.lower() == "enter" and not allow_risky:
+        if key.lower() == "enter":
             warnings.append(f"step {index + 1}: pressing Enter may submit a form; make sure it is a search box")
         step["key"] = key
     elif action == "wait":
@@ -204,10 +227,9 @@ def normalize_plan(raw: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
     steps_in = raw.get("steps") or []
     if not isinstance(steps_in, list):
         raise PlanError("steps must be a list")
-    allow_risky = bool(raw.get("allow_risky"))
     steps, warnings = [], []
     for i, s in enumerate(steps_in):
-        step, w = normalize_step(s, i, allow_risky)
+        step, w = normalize_step(s, i)
         steps.append(step)
         warnings += w
     # Leading navigate to the start URL is implicit; drop a duplicate.
@@ -229,7 +251,6 @@ def normalize_plan(raw: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
         "title": title,
         "tagline": tagline,
         "steps": steps,
-        "allow_risky": allow_risky,
         "estimated_seconds": est,
     }
     return plan, warnings

@@ -69,6 +69,10 @@ python -m playwright install chromium      # one-time browser download
 Requirements: Hermes Agent 0.21.5 or later, Python dependencies `playwright>=1.44,<2` and
 `Pillow>=10.1,<14`, and ffmpeg with ffprobe. No API keys.
 
+Setting (optional, off by default): `allow_private_hosts` lets Ship Reel record localhost
+and private-network pages, for example a local dev server. Environment equivalent:
+`SHIPREEL_ALLOW_PRIVATE_HOSTS=1`.
+
 Optional voice-over: `pip install "kokoro-onnx>=0.4,<1"` into the Python that runs Hermes.
 
 ## Tools
@@ -91,9 +95,27 @@ The bundled `ship-reel` skill teaches Hermes the workflow and how to write a goo
   Chromium. If the optional voice-over is enabled, it downloads the Kokoro model once from
   the kokoro-onnx GitHub release and checks it against pinned SHA-256 hashes. It sends no
   telemetry and calls no other services.
-- **Read-only by default:** clicks on elements that read like sign up, log in, buy, pay,
-  submit, delete, connect wallet and similar are refused unless the plan sets
-  `allow_risky: true`. `javascript:` and `file:` URLs are rejected. It never fills credentials.
+- **Public pages only:** the start URL, `navigate` steps and `cta_url` must resolve (every
+  A/AAAA record) to public addresses. Loopback, private (RFC 1918, IPv6 `fc00::/7`),
+  link-local (including the `169.254.169.254` metadata address), CGNAT `100.64.0.0/10`,
+  unspecified, multicast and reserved ranges are refused, as are their IPv4-mapped forms,
+  decimal/octal/hex IP hosts and `user@host` URLs. Inside the browser every request goes
+  through a route filter and a local filtering proxy that checks each connection (redirect
+  hops, subresources, clicks, websockets) and pins it to the vetted address, so pages cannot
+  reach those ranges either. To record a local dev server, set the plugin setting
+  `allow_private_hosts: true` (`plugins.entries.ship-reel.settings`) or the environment
+  variable `SHIPREEL_ALLOW_PRIVATE_HOSTS=1`. It is off by default and no tool argument can
+  turn it on. Known issue: on machines whose DNS goes through a fake-IP proxy (every name
+  resolves into `198.18.0.0/15`, as with Clash or Surge in fake-ip mode) all hosts are
+  refused; switch the proxy off for Chromium or use the setting.
+- **Risky clicks need your approval:** clicks on elements that read like sign up, log in,
+  buy, pay, send, submit, delete, connect wallet and similar are flagged in the plan, and a
+  `pre_tool_call` hook makes Hermes ask you to approve before `plan_reel`, `record_reel` or
+  `fix_reel` drives the browser through them. The model cannot approve them itself. A matched
+  element that turns out to be risky but was not flagged is skipped. `javascript:` and
+  `file:` URLs are rejected.
+- **Never enters credentials:** `type` steps aimed at password fields are refused at plan
+  time, and at record time if the resolved or focused element is a password input.
 - **Processes:** it runs `ffmpeg` and `ffprobe` as subprocesses, plus local render worker
   processes. It downloads nothing at runtime.
 - **Files:** it writes only under the plugin data directory (override with `SHIP_REEL_HOME`),

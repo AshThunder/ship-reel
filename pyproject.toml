@@ -1,6 +1,6 @@
 [project]
 name = "ship-reel"
-version = "0.2.0"
+version = "0.2.1"
 description = "Hermes Agent plugin: URL + brief -> polished, verified product demo reel"
 requires-python = ">=3.11"
 license = "MIT"
