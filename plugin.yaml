@@ -1,5 +1,5 @@
 name: ship-reel
-version: 0.1.0
+version: 0.2.0
 manifest_version: 2
 api_version: 1
 description: Turn a URL and a one-line brief into a polished, captioned product demo reel for X, recorded, edited and verified by Hermes.

@@ -1,6 +1,6 @@
 [project]
 name = "ship-reel"
-version = "0.1.0"
+version = "0.2.0"
 description = "Hermes Agent plugin: URL + brief -> polished, verified product demo reel"
 requires-python = ">=3.11"
 license = "MIT"
@@ -8,4 +8,8 @@ dependencies = [
     "playwright>=1.44,<2",
     "Pillow>=10.1,<14",
 ]
+
+[project.optional-dependencies]
+# Optional voice-over (Kokoro TTS). The ~120 MB model downloads on first narrated render.
+voice = ["kokoro-onnx>=0.4,<1"]
 

@@ -14,7 +14,8 @@ _STEP = {
         "to": {"type": "string", "enum": ["top", "bottom"]},
         "until": {"type": "string", "description": "For wait: text to wait for (e.g. 'Build finished'); the wait is shown as a sped-up time-lapse"},
         "timeout": {"type": "number", "description": "For wait with until: max seconds (default 60, max 150)"},
-        "caption": {"type": "string", "description": "On-screen caption for this beat, under 70 characters, plain text, no emojis"},
+        "caption": {"type": "string", "description": "On-screen caption (and voice-over line) for this beat, under 70 characters, plain text, no emojis. Say what the viewer gains, not what the cursor does: 'Every Hermes surface, one menu away', not 'Hover over HERMES menu'. Leave empty for utility steps like pressing Escape"},
+        "say": {"type": "string", "description": "Optional voice-over line for this beat (defaults to the caption). One short sentence that fits the shot"},
         "dwell": {"type": "number", "description": "Seconds to hold after the action (0.3-6, default 1.6)"},
         "zoom": {"type": "boolean", "description": "Zoom the camera toward the interaction (default true for click/type/hover)"},
         "zoom_level": {"type": "number", "description": "1.0-2.2, default 1.6"},
@@ -26,7 +27,8 @@ PLAN_REEL = {
     "name": "plan_reel",
     "description": (
         "Plan a product demo reel of a public web page. Give the URL and a short brief; optionally give "
-        "your own shot list of 5-8 steps (navigate/click/type/scroll/hover/wait/press, each with a caption). "
+        "your own shot list of 5-8 steps (navigate/click/type/scroll/hover/wait/press), each with a short benefit-led caption "
+        "that reads like a product launch line, not a UI instruction. Give a short title (the product name) and a tagline. "
         "The tool validates and normalises the steps, then dry-runs them in headless Chromium to confirm "
         "every target resolves. Without steps it inspects the page and drafts a plan you should refine. "
         "Returns a job_id, the plan, dry-run results and the page's headings and clickable labels. "
@@ -78,7 +80,10 @@ EDIT_REEL = {
             "background": {"type": "string", "description": "Hex colour or 'auto'"},
             "accent": {"type": "string", "description": "Hex colour or 'auto'"},
             "sound": {"type": "string", "enum": ["clicks", "none"]},
-            "music": {"type": "string", "description": "Optional path to a music file the user has rights to"},
+            "music": {"type": "string", "description": "'default' (bundled low-volume bed, on by default), 'none', or a path to a music file the user has rights to"},
+            "music_volume": {"type": "number", "description": "Music bed level in dB before the loudness pass (default -12; -40 to 0)"},
+            "voice": {"type": "string", "description": "Voice-over: 'auto' (narrate the captions if the optional kokoro-onnx package is installed), 'none', or a Kokoro voice id such as af_heart, am_michael, bf_emma"},
+            "voice_speed": {"type": "number", "description": "Narration speed 0.8-1.3 (default 1.05)"},
             "speed": {"type": "number", "description": "Global speed multiplier 0.5-3 (default 1)"},
         },
         "required": ["job_id"],

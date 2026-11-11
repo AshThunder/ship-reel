@@ -33,6 +33,9 @@ html { scroll-behavior: auto !important; scrollbar-width: none !important; }
 ::-webkit-scrollbar { display: none !important; width: 0 !important; height: 0 !important; }
 """
 
+_ROLE_HINT_RE = re.compile(
+    r"^(button|link|text|heading|tab|menu|menuitem|nav|label|placeholder|checkbox|option)\s*:\s+(.+)$", re.I)
+
 _SMOOTH_SCROLL_JS = """
 ([top, ms]) => new Promise((resolve) => {
   const max = Math.max(0, document.documentElement.scrollHeight - innerHeight);
@@ -230,6 +233,19 @@ class Driver:
     # ---- locators ---------------------------------------------------------
     def candidates(self, target: str) -> list[tuple[str, Any]]:
         p, t = self.page, target.strip()
+        hint = _ROLE_HINT_RE.match(t)
+        if hint:  # models often write 'button: Docs' or 'heading: Pricing'; treat the prefix as a hint
+            kind, rest = hint.group(1).lower(), hint.group(2).strip()
+            role = {"menu": "button", "menuitem": "menuitem", "nav": "link"}.get(kind, kind)
+            base = self.candidates(rest)
+            first = []
+            if role in ("button", "link", "tab", "heading", "menuitem", "checkbox", "option"):
+                first.append((f"{role}-hinted", p.get_by_role(role, name=rest)))
+            elif role == "label":
+                first.append(("label", p.get_by_label(rest)))
+            elif role == "placeholder":
+                first.append(("placeholder", p.get_by_placeholder(rest)))
+            return first + base
         if t.startswith("css="):
             return [("css", p.locator(t[4:]))]
         if t.startswith("text="):
@@ -258,7 +274,7 @@ class Driver:
             out.insert(0, ("css", p.locator(t)))
         return out
 
-    def resolve(self, target: str, skip: int = 0, prefer: str | None = None) -> tuple[str, Any, int]:
+    def resolve(self, target: str, skip: int = 0, prefer: str | None = None, _short: bool = False) -> tuple[str, Any, int]:
         """Return (strategy, element, index) for the first visible match, skipping `skip` earlier hits."""
         seen = 0
         cands = self.candidates(target)
@@ -283,6 +299,16 @@ class Driver:
                     return name, el, idx
                 seen += 1
                 break  # one hit per strategy, so retries move to a different strategy
+        words = target.split()
+        if not _short and len(words) > 3 and not target.startswith(("css=", "role=", "text=", "label=", "placeholder=")):
+            # trailing decorations ('TOGGLE ⌘ K', arrows) often are not part of the accessible name
+            for cut in (1, 2, 3):
+                if len(words) - cut < 2:
+                    break
+                try:
+                    return self.resolve(" ".join(words[:-cut]), skip, prefer, _short=True)
+                except StepFailed:
+                    continue
         raise StepFailed(f"no visible element matches {target!r}")
 
     # ---- motion -------------------------------------------------------------
@@ -342,6 +368,17 @@ class Driver:
         return (max(6, min(VIEWPORT[0] - 6, x)), max(6, min(VIEWPORT[1] - 6, y)))
 
     # ---- actions --------------------------------------------------------------
+    def wait_scroll_settled(self, limit: float = 3.0) -> None:
+        """Wait until the page stops scrolling (native smooth scroll from anchor links)."""
+        try:
+            self.page.wait_for_function(
+                """() => { const w = window; const y = Math.round(scrollY);
+                  if (w.__srLastY !== y) { w.__srLastY = y; w.__srStill = performance.now(); return false; }
+                  return performance.now() - w.__srStill > 280; }""",
+                timeout=int(limit * 1000), polling=60)
+        except Exception:
+            pass
+
     def wait_quiet(self, limit: float = 4.0) -> None:
         """Wait for a client-rendered view to finish: no skeleton / busy placeholders and
         a short pause in DOM mutations. Bounded so a busy page cannot stall the recording."""
@@ -392,6 +429,19 @@ class Driver:
 
     def click(self, step: dict[str, Any], skip: int) -> dict[str, Any]:
         strategy, el, _ = self.resolve(step["target"], skip)
+        try:
+            is_heading = el.evaluate(
+                "e => (/^H[1-6]$/.test(e.tagName) || e.getAttribute('role') === 'heading') && !e.closest('a,button,[role=button]')")
+        except Exception:
+            is_heading = False
+        if is_heading:
+            # 'click the Pricing heading' means 'take me to that section': scroll there instead
+            y = self.page.evaluate("scrollY")
+            bb = el.bounding_box()
+            if self.cursor[1] < 140 and not self.dry:
+                self.move_cursor(VIEWPORT[0] * 0.56, VIEWPORT[1] * 0.58)
+            self.scroll_to(y + bb["y"] - VIEWPORT[1] * 0.18, step.get("duration", 1.4))
+            return {"strategy": strategy, "changed": True, "how": "scroll-to-heading", "t_visual": round(time.time(), 4)}
         text = ""
         try:
             text = (el.inner_text(timeout=800) or "")[:80]
@@ -423,6 +473,11 @@ class Driver:
             self.page.wait_for_timeout(500)
             waited += 500
             changed, new_doc, how = self._changed(url_before)
+        t_visual = None
+        if how == "scroll":
+            # anchor links scroll natively; the caption should land with the section
+            self.wait_scroll_settled()
+            t_visual = time.time()
         if new_doc:
             t_nav = time.time()
             self.settle()
@@ -430,6 +485,7 @@ class Driver:
                 self.cast.restart()
             self.page.wait_for_timeout(150)
             self.wait_quiet(2.5)
+            t_visual = time.time()
             self.mark("nav", t_click + 0.35, time.time())
             self.urls.append((time.time(), self.page.url))
         elif how == "url":
@@ -449,13 +505,17 @@ class Driver:
                     self.cast.restart()
             self.wait_quiet()
             self.page.wait_for_timeout(250)
+            t_visual = time.time()
             self.mark("nav", t_click + 0.4, time.time())
             self.urls.append((time.time(), self.page.url))
         if (new_doc or how == "url") and not self.dry:
             # the old click point now sits on whatever the new page put there (often a
             # header button); drift the cursor back toward the content
             self.move_cursor(VIEWPORT[0] * 0.55, VIEWPORT[1] * 0.5)
-        return {"strategy": strategy, "focus": [x, y], "changed": changed, "how": how, "text": text}
+        out = {"strategy": strategy, "focus": [x, y], "changed": changed, "how": how, "text": text}
+        if t_visual:
+            out["t_visual"] = round(t_visual, 4)
+        return out
 
     def do_step(self, step: dict[str, Any], skip: int = 0) -> dict[str, Any]:
         a = step["action"]
@@ -523,6 +583,7 @@ class Driver:
             else:
                 top = y + step.get("amount", 0.75) * VIEWPORT[1]
             self.scroll_to(top, step.get("duration", 1.4))
+            info["t_visual"] = round(time.time(), 4)
             after = self.page.evaluate("scrollY")
             info["scrolled"] = round(after - y)
             if abs(after - y) < 3 and step.get("to") != "top":
@@ -566,6 +627,7 @@ class Driver:
                 res["ok"] = False
                 res["error"] = str(last_err).split("\n")[0][:240]
             res["t_action_end"] = round(time.time(), 4)
+            res["t_caption"] = res.pop("t_visual", res["t_start"])
             t_d = time.time()
             self.sleep(step["dwell"] if res["ok"] else 0.2)
             self.mark("dwell", t_d, time.time(), step=i)

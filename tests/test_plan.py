@@ -64,3 +64,32 @@ def test_wait_until_and_estimate():
     assert w["until"] == "Done" and w["timeout"] == 150 and w["timelapse"] is True
     assert plan["estimated_seconds"] > 10
     assert any("5-8" in x for x in warns)
+
+
+def test_caption_quotes_and_mechanical_lint():
+    from ship_reel.engine import plan as P
+    assert P.clean_caption("'Scroll to 'Pricing'") == "Scroll to Pricing" or "'" not in P.clean_caption("Scroll to 'Pricing")
+    assert P.clean_caption('"Fast notes"') == "Fast notes"
+    assert P.mechanical_caption("Scroll to Terminal Velocity")
+    assert P.mechanical_caption("Hover over HERMES menu")
+    assert not P.mechanical_caption("Every Hermes surface, one menu away")
+    plan, _ = P.normalize_plan({"url": "https://x.dev", "steps": [
+        {"action": "press", "key": "Escape", "caption": "Close search palette"},
+        {"action": "scroll", "amount": 0.5, "caption": "Docs that get you running"}]})
+    assert plan["steps"][0]["caption"] == "" and plan["steps"][1]["caption"] == "Docs that get you running"
+
+
+def test_role_hint_targets_are_recognised():
+    from ship_reel.engine import browser as B
+    m = B._ROLE_HINT_RE.match("button: Hermes : About Nous")
+    assert m and m.group(1) == "button" and m.group(2) == "Hermes : About Nous"
+    assert B._ROLE_HINT_RE.match("heading: Terminal Velocity").group(1) == "heading"
+    assert B._ROLE_HINT_RE.match("Hermes : About Nous") is None  # a colon inside a label is not a hint
+    assert B._ROLE_HINT_RE.match("css=.btn") is None
+
+
+def test_dry_run_failure_suggests_nearby_labels():
+    from ship_reel import tools
+    inv = {"actions": [{"text": "INSTALL VIA TERMINAL"}, {"text": "Docs"}], "headings": [{"text": "Terminal Velocity"}]}
+    msg = tools._suggest("step 1 did not work", {"target": "button: Install via terminl"}, inv)
+    assert "INSTALL VIA TERMINAL" in msg

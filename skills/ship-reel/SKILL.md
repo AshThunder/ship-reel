@@ -17,15 +17,17 @@ matters, not what is being clicked.
    Each step: `action` (navigate, click, type, scroll, hover, wait, press),
    `target` (visible text or accessible name; `role=link:Docs`, `css=...` as a
    last resort), `caption`, optional `dwell` seconds.
-3. Read `dry_run`. Every step must be `ok: true`. If a target did not resolve,
-   pick another label from `page.clickable` and re-plan.
+3. Read `dry_run` ("N/N steps resolved"). If a target did not resolve, the
+   warning lists the closest visible labels; use one of those and re-plan.
+   If `caption_advice` is present, rewrite those captions before recording.
 
 Shot list rules that make reels look professional:
 - Open on the hero with a `wait` step (dwell 2) whose caption is the product's promise.
 - Use `scroll` with a heading as `target` to move between sections; never more than two scrolls in a row.
 - `hover` opens hover menus; `click` follows links and buttons. Clicks zoom in automatically.
 - Use `wait` with `until: "<text>"` for anything slow (a run, a build, a generation). It is shown as a time-lapse with a speed badge.
-- Captions: under 70 characters, sentence case, no emojis, no trailing full stop, benefit first ("Every hold lands in the audit log", not "Click Audit log").
+- Captions: under 70 characters, sentence case, no emojis, no trailing full stop, benefit first ("Every hold lands in the audit log", not "Click Audit log"). They are also the voice-over script; add `say` to a step for a different spoken line.
+- Utility steps (pressing Escape to close something) need no caption.
 - Set `title` and `tagline` for the title card; `cta_url` for the end card if it differs.
 - If a click starts a one-off or rate-limited action, pass `dry_run: false` so it only runs once, while recording.
 
@@ -42,8 +44,12 @@ from the reel; if an important one failed, fix the target and re-plan.
 
 `edit_reel(job_id)` renders 1920x1080 plus a 1080x1920 vertical cut. Options:
 `background` / `accent` (hex, default brand colour from the page), `fps` (30/60),
-`sound` (`clicks` or `none`), `music` (path to a track the user owns),
-`speed`. The edit fits itself under 90 s.
+`sound` (`clicks` or `none`), `music` (`default` low-volume bed that ships with
+the plugin, `none`, or a path to a track the user owns), `music_volume` (dB),
+`voice` (`auto` narrates the captions when the optional `kokoro-onnx` package is
+installed; `none`; or a Kokoro voice such as `af_heart`, `am_michael`, `bf_emma`),
+`speed`. Music ducks under the narration. The edit fits itself under 90 s, and
+holds shots a little longer when the narration needs room.
 
 ## 4. Verify and fix
 

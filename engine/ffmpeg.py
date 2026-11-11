@@ -36,8 +36,11 @@ def concat_cmd(list_file: str, out: str) -> list[str]:
 
 
 def mux_cmd(video: str, sfx_wav: str | None, out: str, duration: float, music: str | None = None,
-            voice_wav: str | None = None, music_db: float = -17.0) -> list[str]:
-    """Final mux: video copy + mixed audio (sfx, optional music bed, optional voice) -> AAC, faststart."""
+            voice_wav: str | None = None, music_db: float = -12.0) -> list[str]:
+    """Final mux: video copy + mixed audio -> AAC, faststart.
+
+    Layers: synthesised click/key sounds, an optional voice-over, and an optional looped
+    music bed that fades in and out and is side-chain ducked under the voice."""
     cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-i", video]
     labels = []
     filters = []
@@ -48,22 +51,31 @@ def mux_cmd(video: str, sfx_wav: str | None, out: str, duration: float, music: s
         idx += 1
     if voice_wav:
         cmd += ["-i", voice_wav]
-        filters.append(f"[{idx}:a]aformat=sample_rates=48000:channel_layouts=stereo,volume=1.0[vo]")
+        split = ",asplit=2[vo][vosc]" if music else "[vo]"
+        filters.append(f"[{idx}:a]aformat=sample_rates=48000:channel_layouts=stereo,"
+                       f"highpass=f=70,acompressor=threshold=0.12:ratio=3:attack=8:release=120:makeup=1.4{split}")
         labels.append("[vo]")
         idx += 1
     if music:
         cmd += ["-stream_loop", "-1", "-i", music]
         fade_out = max(0.0, duration - 2.5)
-        duck = "volume=-6dB," if voice_wav else ""
         filters.append(
-            f"[{idx}:a]aformat=sample_rates=48000:channel_layouts=stereo,atrim=0:{duration:.3f},"
-            f"volume={music_db}dB,{duck}afade=t=in:st=0:d=1.2,afade=t=out:st={fade_out:.3f}:d=2.4[mu]"
+            f"[{idx}:a]aformat=sample_rates=48000:channel_layouts=stereo,atrim=0:{duration:.3f},asetpts=PTS-STARTPTS,"
+            f"volume={music_db}dB,afade=t=in:st=0:d=1.5,afade=t=out:st={fade_out:.3f}:d=2.4"
+            + ("[mu0]" if voice_wav else "[mu]")
         )
+        if voice_wav:
+            filters.append("[mu0][vosc]sidechaincompress=threshold=0.02:ratio=9:attack=25:release=420:knee=4[mu]")
         labels.append("[mu]")
         idx += 1
     if not labels:
         return cmd + ["-c:v", "copy", "-an", "-movflags", "+faststart", out]
-    norm = "loudnorm=I=-16:TP=-1.5:LRA=11" if (music or voice_wav) else "alimiter=limit=0.89"
+    if voice_wav:
+        norm = "loudnorm=I=-16:TP=-1.5:LRA=11"
+    elif music:
+        norm = "loudnorm=I=-20:TP=-2:LRA=9"
+    else:
+        norm = "alimiter=limit=0.89"
     if len(labels) == 1 and not filters:
         filters.append(f"{labels[0]}aformat=sample_rates=48000:channel_layouts=stereo,{norm},atrim=0:{duration:.3f}[a]")
     else:

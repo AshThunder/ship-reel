@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 import traceback
 from pathlib import Path
@@ -96,24 +97,50 @@ def plan_reel(args: dict[str, Any], **kwargs: Any) -> str:
     for r in probe.get("results", []):
         resolved.append({k: r.get(k) for k in ("index", "action", "ok", "strategy", "error", "url_after", "note")})
     failed = [r for r in resolved if not r["ok"]]
+    mech = [i + 1 for i, st in enumerate(plan["steps"]) if planmod.mechanical_caption(st.get("caption", ""))]
     job.update({"url": url, "brief": brief, "plan": plan, "status": "planned", "probe": resolved})
     store.log(job, "planned", steps=len(plan["steps"]), auto=auto, failed=len(failed))
     store.save(job)
     inv = probe.get("inventory") or {}
-    return _ok(
+    compact_steps = [{k: v for k, v in st.items() if k in ("action", "target", "url", "value", "key", "amount", "to", "until", "caption")}
+                     for st in plan["steps"]]
+    out: dict[str, Any] = dict(
         job_id=job["id"],
         auto_generated=auto,
-        plan=plan,
-        dry_run=resolved,
-        warnings=warnings + [f"step {r['index'] + 1} did not work in the dry run: {r['error']}" for r in failed],
-        page={
-            "title": inv.get("title"),
-            "headings": [h["text"] for h in inv.get("headings", [])][:10],
-            "clickable": [a["text"] for a in inv.get("actions", []) if a.get("text")][:30],
-        },
+        title=plan.get("title"),
+        tagline=plan.get("tagline"),
+        steps=compact_steps,
+        estimated_seconds=plan.get("estimated_seconds"),
+        dry_run=f"{len(resolved) - len(failed)}/{len(resolved)} steps resolved on the live page",
+        warnings=warnings + [_suggest(f"step {r['index'] + 1} did not work in the dry run: {r['error']}", plan["steps"][r["index"]], inv)
+                             for r in failed],
+        caption_advice=(f"Captions for steps {mech} describe the cursor, not the product. Rewrite them as what "
+                        "the viewer learns (e.g. 'Every Hermes surface, one menu away' instead of 'Hover over "
+                        "HERMES menu') and call plan_reel again with this job_id.") if mech else None,
         next=("Fix the failed steps and call plan_reel again with job_id" if failed else
+              "Rewrite the flagged captions and call plan_reel again with job_id" if mech else
               "Call record_reel with this job_id (refine steps first if the auto plan is generic)"),
     )
+    if auto or failed:  # the model needs the page's vocabulary only when it has to write or repair steps
+        out["page"] = {
+            "title": inv.get("title"),
+            "headings": [h["text"][:60] for h in inv.get("headings", [])][:8],
+            "clickable": [a["text"][:40] for a in inv.get("actions", []) if a.get("text")][:20],
+        }
+    return _ok(**{k: v for k, v in out.items() if v not in (None, [], "")})
+
+
+def _suggest(msg: str, step: dict[str, Any], inv: dict[str, Any]) -> str:
+    """Append the closest visible labels so the model can repair a target in one go."""
+    import difflib
+    tgt = re.sub(r"^\w+\s*[:=]\s*", "", str(step.get("target") or "")).strip()
+    if not tgt:
+        return msg
+    labels = [a["text"].strip() for a in inv.get("actions", []) if a.get("text")]
+    labels += [h["text"].strip() for h in inv.get("headings", []) if h.get("text")]
+    low = {lab.lower(): lab for lab in labels if 0 < len(lab) <= 80}
+    near = difflib.get_close_matches(tgt.lower(), list(low), n=3, cutoff=0.45)
+    return msg + (f"; closest visible labels: {[low[n] for n in near]}" if near else "")
 
 
 @_guard
@@ -136,7 +163,8 @@ def record_reel(args: dict[str, Any], **kwargs: Any) -> str:
     store.log(job, "recorded", ok=ok, total=len(steps), frames=len(events["frames"]), took=round(time.time() - t, 1))
     store.save(job)
     return _ok(job_id=job["id"], steps_ok=ok, steps_total=len(steps), frames=len(events["frames"]),
-               raw_seconds=job["recording"]["seconds"], steps=job["recording"]["steps"],
+               raw_seconds=job["recording"]["seconds"],
+               skipped=[{"step": st["index"] + 1, "error": st.get("error")} for st in steps if not st.get("ok")] or None,
                next="Call edit_reel" + ("" if ok == len(steps) else " (skipped steps are cut from the reel; or fix them and re-plan)"))
 
 
@@ -146,7 +174,7 @@ def edit_reel(args: dict[str, Any], **kwargs: Any) -> str:
     if not job.get("recording"):
         return _err("job has not been recorded; call record_reel first")
     style = args.get("style") or {}
-    for k in ("format", "vertical", "fps", "zoom", "background", "accent", "sound", "music", "speed"):
+    for k in ("format", "vertical", "fps", "zoom", "background", "accent", "sound", "music", "music_volume", "voice", "voice_speed", "speed"):
         if k in args and args[k] is not None:
             style[k] = args[k]
     res = editor.edit(job, store.job_path(job["id"]), style)
@@ -155,8 +183,10 @@ def edit_reel(args: dict[str, Any], **kwargs: Any) -> str:
     job["status"] = "edited"
     store.log(job, "edited", main=res["main"], took=res["render_seconds"])
     store.save(job)
-    return _ok(job_id=job["id"], video=res["main"], outputs=res["outputs"], theme=res["theme"],
-               render_seconds=res["render_seconds"], next="Call verify_reel")
+    outs = {fmt: {"path": o["path"], "seconds": round(o["duration"], 1), "size": f"{o['size'][0]}x{o['size'][1]}",
+                  "narrated": o.get("narrated", False)} for fmt, o in res["outputs"].items()}
+    return _ok(job_id=job["id"], video=res["main"], outputs=outs, theme=res["theme"],
+               audio=res.get("audio"), render_seconds=res["render_seconds"], next="Call verify_reel")
 
 
 @_guard
@@ -167,8 +197,11 @@ def verify_reel(args: dict[str, Any], **kwargs: Any) -> str:
     job["status"] = "verified" if rep["pass"] else "needs_fix"
     store.log(job, "verified", passed=rep["pass"], summary=rep.get("summary"))
     store.save(job)
-    return _ok(job_id=job["id"], passed=rep["pass"], summary=rep.get("summary"), failures=rep.get("failures", []),
-               warnings=rep.get("warnings", []), checks=rep.get("outputs", {}),
+    def brief(items):
+        return [f"{i.get('format', '')} {i['name']}: {i.get('detail', '')}".strip() for i in items]
+    n_checks = sum(len(v) for v in (rep.get("outputs") or {}).values())
+    return _ok(job_id=job["id"], passed=rep["pass"], summary=rep.get("summary"), checks_run=n_checks,
+               failures=brief(rep.get("failures", [])), warnings=brief(rep.get("warnings", [])),
                next="Call draft_post" if rep["pass"] else "Call fix_reel")
 
 

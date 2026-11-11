@@ -28,8 +28,16 @@ back two MP4s: a 1920x1080 cut and a 1080x1920 cut for vertical feeds.
   cross-fades. Waits for slow work (`wait` with `until`) become a labelled time-lapse.
 - **Numbered captions, a title card and an end card.** Colours come from the page itself,
   using hue-binned brand colour detection, with caption pills that contrast with the page.
-- **Sound.** Click and key sounds are synthesised in code, so there is nothing to license.
-  You can add your own music track, which fades in and out and is loudness-normalised.
+- **Voice-over.** Optional narration with Kokoro, a local text-to-speech model, so nothing
+  leaves the machine. The captions are the script, or a step can carry its own `say` line.
+  Lines are timed to their shots, and the title card and shots hold a little longer when a
+  line needs room. Install the extra (`pip install "kokoro-onnx>=0.4,<1"`) and the
+  ~120 MB model downloads on the first narrated render, checked against pinned SHA-256
+  hashes. Without it, reels render without narration.
+- **Music and sound.** A quiet music bed is on by default. It is synthesised by
+  `scripts/make_music_bed.py`, so it is covered by this repo's MIT licence with no third-party
+  audio. It ducks under the voice-over. Use `music: none` to turn it off, or pass a track
+  you have rights to. Click and key sounds are synthesised in code too.
 - **A vertical cut.** This is a separate camera pass that follows the cursor, not a
   centre crop.
 - **Objective checks.** Duration of 90 s or less, H.264 High with yuv420p, faststart, file
@@ -40,6 +48,15 @@ back two MP4s: a 1920x1080 cut and a 1080x1920 cut for vertical feeds.
 |---|---|
 | ![Hermes menu](docs/img/nous-hermes-menu.png) | ![Vertical cut](docs/img/nous-vertical.png) |
 | ![Search palette](docs/img/nous-search-palette.png) | ![Lockwatch lock explorer](docs/img/lockwatch-explorer.png) |
+
+## Watch Hermes make one
+
+![Hermes calling record_reel, with the live browser capture](docs/img/meta-demo-record.png)
+
+In the meta demo, Hermes Agent takes one typed prompt and calls `plan_reel`,
+`record_reel`, `edit_reel`, `verify_reel` and `draft_post` itself. The reel at the end
+is the unedited output. See [docs/demo-plan.md](docs/demo-plan.md) for how it was
+recorded.
 
 ## Install
 
@@ -52,13 +69,15 @@ python -m playwright install chromium      # one-time browser download
 Requirements: Hermes Agent 0.21.5 or later, Python dependencies `playwright>=1.44,<2` and
 `Pillow>=10.1,<14`, and ffmpeg with ffprobe. No API keys.
 
+Optional voice-over: `pip install "kokoro-onnx>=0.4,<1"` into the Python that runs Hermes.
+
 ## Tools
 
 | Tool | What it does |
 |---|---|
 | `plan_reel` | Validates a URL and brief, takes or drafts a 5 to 8 step shot list (navigate, click, type, scroll, hover, press, wait), normalises it, and dry-runs every step against the live page so bad targets are caught before recording. |
 | `record_reel` | Records the plan in headless Chromium. Every click is checked for an effect (URL, DOM or scroll change) and retried with another locator if nothing happened. |
-| `edit_reel` | Renders the landscape and vertical cuts in parallel worker processes. Options: `format`, `vertical`, `fps`, `zoom`, `background`, `accent`, `sound`, `music`, `speed`. |
+| `edit_reel` | Renders the landscape and vertical cuts in parallel worker processes. Options: `format`, `vertical`, `fps`, `zoom`, `background`, `accent`, `sound`, `music`, `music_volume`, `voice`, `voice_speed`, `speed`. |
 | `verify_reel` | Runs ffprobe and ffmpeg analysis and returns pass/fail with reasons. |
 | `fix_reel` | Applies fixes for what verify flagged (timing, holds, encoding, size, re-record) and verifies again, up to 3 rounds. |
 | `list_reels`, `reel_status` | Job history and full job state. |
@@ -69,23 +88,31 @@ The bundled `ship-reel` skill teaches Hermes the workflow and how to write a goo
 ## Safety and disclosures
 
 - **Network:** opens the URL you give it, and the pages your shot list visits, in headless
-  Chromium. It sends no telemetry and calls no other services.
+  Chromium. If the optional voice-over is enabled, it downloads the Kokoro model once from
+  the kokoro-onnx GitHub release and checks it against pinned SHA-256 hashes. It sends no
+  telemetry and calls no other services.
 - **Read-only by default:** clicks on elements that read like sign up, log in, buy, pay,
   submit, delete, connect wallet and similar are refused unless the plan sets
   `allow_risky: true`. `javascript:` and `file:` URLs are rejected. It never fills credentials.
 - **Processes:** it runs `ffmpeg` and `ffprobe` as subprocesses, plus local render worker
   processes. It downloads nothing at runtime.
-- **Files:** it writes only under the plugin data directory (override with `SHIP_REEL_HOME`).
+- **Files:** it writes only under the plugin data directory (override with `SHIP_REEL_HOME`),
+  including the voice model if you enable narration.
 - **Publishing:** none. `draft_post` returns text for you to review and post yourself.
 
 ## Samples
 
-Both samples were made by the plugin from public pages, read-only:
+Both samples were made by the plugin from public pages, read-only. Each comes as a
+music-only cut and a narrated cut, in 16:9 and 9:16:
 
-- nousresearch.com: search palette, the Hermes menu, research, Hermes Agent, install docs
-  (36 s).
+- nousresearch.com: search palette, the Hermes menu, research, Hermes Agent, install docs.
 - lockwatch.online: landing page, live board, lock explorer, Redemption Radar, keeper
-  activity (37 s).
+  activity.
+
+The reel in the meta demo was made in a live Hermes session. Hermes Agent, running a model
+on Groq, took one typed prompt and called `plan_reel`, `record_reel`, `edit_reel`,
+`verify_reel` and `draft_post` itself. `scripts/compose_demo.py` turns such a session into
+the meta demo.
 
 ## Development
 
@@ -96,4 +123,6 @@ hermes plugins validate .
 
 ## Licence
 
-MIT. Inter is bundled under the SIL Open Font License (`assets/fonts/OFL.txt`).
+MIT. Inter is bundled under the SIL Open Font License (`assets/fonts/OFL.txt`). The music
+bed (`assets/music/bed.m4a`) is generated by `scripts/make_music_bed.py` and is MIT. Kokoro
+model weights are Apache-2.0 and are downloaded, not bundled.

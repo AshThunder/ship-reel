@@ -1,35 +1,53 @@
-# Meta demo: Hermes makes a reel of Nous Research (about 75 s)
+# Meta demo: Hermes makes its own launch reel
 
-The idea: Hermes Agent, running the Ship Reel plugin, makes a launch reel of
-nousresearch.com. The demo is the agent at work, then the reel it made.
+A real Hermes Agent session builds a launch reel of nousresearch.com with Ship Reel.
+Nothing is staged: the prompt is typed into the Hermes TUI, the model (openai/gpt-oss-120b
+on Groq) decides every tool call, and the reel at the end is the unedited output of
+`edit_reel`.
 
-| Time | Shot | On screen | Voice-over or caption |
-|---|---|---|---|
-| 0:00-0:05 | Title | "Ship Reel, a Hermes Agent plugin" on a flat #0000EF card | "Demo videos take hours. Hermes can make one from a URL." |
-| 0:05-0:15 | Hermes TUI | Type: "Make a launch reel of https://nousresearch.com. Show the search palette, the Hermes menu, and how to install." | "One sentence and a link." |
-| 0:15-0:25 | Hermes TUI | `plan_reel` tool call with the 9-step shot list and the dry run marking each step ok | "It plans a shot list and dry-runs every step against the live site first." |
-| 0:25-0:35 | Hermes TUI, sped up 4x (labelled) | `record_reel`, then `edit_reel` progress | "Then it records in a real browser and edits: zoom, cursor, captions, a vertical cut." |
-| 0:35-0:40 | Hermes TUI | `verify_reel` PASS table, then `draft_post` text | "It checks its own work and drafts the post. It never posts." |
-| 0:40-1:05 | The reel | samples/nous-research_landscape.mp4, 0:04-0:29 at full screen | (reel audio) |
-| 1:05-1:12 | Split | Vertical cut beside the landscape cut | "Both formats, ready for X." |
-| 1:12-1:15 | End card | "hermes plugins install AshThunder/ship-reel" | - |
+## What the recorded session shows (11 Nov 2026)
 
-The total is about 75 s, under X's limit of 2:20 and under the hackathon's cap.
+1. The prompt, typed into `hermes chat`.
+2. `plan_reel`: the model writes an 8-step shot list. Ship Reel dry-runs it on the live
+   site and flags two captions that described the cursor instead of the product. The
+   model rewrites them and plans again.
+3. `record_reel`: headless Chromium records the walkthrough, with every click checked
+   for an effect (30 s).
+4. `edit_reel`: landscape and vertical cuts with zoom, captions, Kokoro voice-over and
+   the music bed (45 s).
+5. `verify_reel`: PASS, 24 checks, no warnings.
+6. `draft_post`: post text. Ship Reel never posts.
 
-## What is needed to record it
+The whole session took 2 min 45 s of wall time, including Groq rate-limit retries.
 
-1. **A working model for the live Hermes session.** GEMINI_API_KEY authenticates
-   (`gemini-2.5-flash` answered 404 "use a newer model", so the key is accepted), but
-   on 11 Nov at 13:50-14:00 WAT `gemini-3.8-flash` returned 503 "high demand", and
-   `gemini-3.7-flash` and `gemini-flash-latest` timed out. Options: retry Gemini later,
-   or Chris supplies another provider key.
-2. **Screen capture of the Hermes TUI.** Run in a terminal at 1920x1080 with a large font
-   (asciinema plus agg, or a screen recorder). Ship Reel itself can't record a terminal.
-3. **The finished reel.** samples/nous-research_landscape.mp4 and _vertical.mp4, or a
-   fresh run from the live session.
-4. **Assembly.** A short ffmpeg concat or any editor: title card, TUI capture (speed up
-   the record and edit wait to 4x and label it), reel, end card.
-5. **Optional voice-over.** Chris reads the lines above, or captions only.
+## The cut (`scripts/compose_demo.py`, about 88 s)
 
-Nothing in the demo logs in, submits forms or posts. The browsing on nousresearch.com is
-read-only.
+| Time | Shot |
+|---|---|
+| 0:00 | Title card: "Hermes makes its own launch reel" |
+| 0:03 | The prompt being typed (1.6x) |
+| 0:19 | `plan_reel` and the caption rewrite (sped up, labelled) |
+| 0:24 | `record_reel`, with the live browser capture picture-in-picture (sped up, labelled) |
+| 0:37 | `edit_reel` (sped up, labelled) |
+| 0:42 | `verify_reel` passes, `draft_post`, and the draft held on screen |
+| 0:52 | Card: "The reel Hermes made" |
+| 0:53 | The narrated reel, 31 s, with its own audio |
+| 1:24 | End card: `hermes plugins install AshThunder/ship-reel` |
+
+Every speed-up is labelled on screen; nothing is cut out of the agent's run.
+
+## Reproduce
+
+1. Configure a provider in `~/.hermes/config.yaml` that reads its key from the
+   environment (`key_env`). Never put a key in the config file.
+2. Record the session: `asciinema rec -c "hermes chat" session.cast`. A 112x34 terminal
+   works well.
+3. `python scripts/compose_demo.py session.cast <job_dir> demo.mp4`. `job_dir` is the
+   Ship Reel job the session created, under the plugin data directory.
+
+Notes from making it:
+- Groq's free tier caps a request at 8,000 tokens per minute, so Ship Reel's tool results
+  are deliberately compact. Full detail is always available from `reel_status`.
+- In this Hermes build, `-t ship_reel` on the command line was rejected because the
+  toolset name is validated before plugins load. Limit the CLI to Ship Reel with
+  `platform_toolsets: {cli: [ship_reel]}` instead.

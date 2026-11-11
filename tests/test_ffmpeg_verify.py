@@ -21,7 +21,7 @@ def test_mux_cmd_variants():
     assert "+faststart" in plain and "alimiter" in plain and "loudnorm" not in plain and "-c:v copy" in plain
     music = F.mux_cmd("v.mp4", "sfx.wav", "o.mp4", 30.0, music="m.mp3")
     ms = " ".join(music)
-    assert "loudnorm=I=-16" in ms and "amix=inputs=2" in ms and "afade=t=out" in ms
+    assert "loudnorm=I=-20" in ms and "amix=inputs=2" in ms and "afade=t=out" in ms
     assert music.index("-stream_loop") < music.index("m.mp3")
     silent = " ".join(F.mux_cmd("v.mp4", None, "o.mp4", 30.0))
     assert "-an" in silent

@@ -108,7 +108,7 @@ def verify(job: dict[str, Any]) -> dict[str, Any]:
     skipped = [s for s in steps if not s.get("ok")]
     for fmt, out in render["outputs"].items():
         d = out["duration"]
-        cards = [(0.0, 3.2), (d - 3.7, d + 1)]
+        cards = [(0.0, float(out.get("title_d", 2.4)) + 0.8), (d - 3.7, d + 1)]
         checks = check_output(out["path"], out, sound, cards)
         spans = out.get("caption_spans", [])
         n_cap_expected = len([s for s in steps if s.get("ok") and s.get("caption")])

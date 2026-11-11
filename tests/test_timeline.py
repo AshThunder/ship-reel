@@ -109,3 +109,18 @@ def test_smoothdamp_converges_without_overshoot():
     vals = [sd.step(2.0, 1 / 30) for _ in range(90)]
     assert abs(vals[-1] - 2.0) < 0.01
     assert max(vals) <= 2.0 + 1e-6
+
+
+def test_caption_waits_for_scroll_to_settle():
+    ev = synthetic_events()
+    base = T.build(ev, PLAN, 1920, 1080, fps=30)
+    ev2 = synthetic_events()
+    ev2["steps"][1]["t_caption"] = ev2["t0"] + 10.5  # the scroll lands at 10.5 s
+    late = T.build(ev2, PLAN, 1920, 1080, fps=30)
+    a0 = base.captions[1]["a"]
+    a1 = late.captions[1]["a"]
+    assert a1 > a0 + 0.5
+    # appears with a short lead before the view settles, not after
+    assert a1 < base.captions[1]["a"] + (10.5 - 9.0) + 0.01
+    # the previous caption stays up until the next one takes over
+    assert abs(late.captions[0]["b"] - a1) < 1e-6

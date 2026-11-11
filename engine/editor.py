@@ -12,7 +12,7 @@ from typing import Any
 
 from PIL import Image
 
-from . import audio, ffmpeg as ff, theme as th, timeline as tl
+from . import audio, ffmpeg as ff, theme as th, timeline as tl, voice
 
 WORKER = Path(__file__).resolve().parent / "render_worker.py"
 
@@ -32,7 +32,10 @@ def default_style() -> dict[str, Any]:
         "background": "auto",       # hex or auto (brand colour from the page)
         "accent": "auto",
         "sound": "clicks",          # clicks | none
-        "music": None,              # optional path to a music file you have rights to
+        "music": "default",         # default (bundled bed) | none | path to a file you have rights to
+        "music_volume": -12.0,      # dB applied to the bed before the final loudness pass
+        "voice": "auto",            # auto (narrate if kokoro-onnx is installed) | none | a Kokoro voice id
+        "voice_speed": 1.05,
         "speed": 1.0,
         "dwell_rate": 1.0,
         "crf": 17,
@@ -52,10 +55,40 @@ def merge_style(style: dict[str, Any] | None, base: dict[str, Any] | None = None
     s["dwell_rate"] = max(0.5, min(3.0, float(s["dwell_rate"])))
     s["crf"] = max(12, min(30, int(s["crf"])))
     s["max_seconds"] = max(15.0, min(90.0, float(s["max_seconds"])))
-    if s["music"]:
-        mp = Path(str(s["music"])).expanduser()
+    m = str(s["music"] or "none").strip()
+    if m.lower() in ("none", "off", "false", ""):
+        s["music"] = None
+    elif m.lower() in ("default", "on", "true", "auto"):
+        s["music"] = str(DEFAULT_MUSIC) if DEFAULT_MUSIC.is_file() else None
+    else:
+        mp = Path(m).expanduser()
         s["music"] = str(mp) if mp.is_file() else None
+    s["music_volume"] = max(-40.0, min(0.0, float(s["music_volume"])))
+    v = str(s["voice"] or "none").strip()
+    s["voice"] = None if v.lower() in ("none", "off", "false", "") else v
+    s["voice_speed"] = max(0.8, min(1.3, float(s["voice_speed"])))
     return s
+
+
+DEFAULT_MUSIC = Path(__file__).resolve().parent.parent / "assets" / "music" / "bed.m4a"
+
+
+def _narrate(st: dict[str, Any], plan: dict[str, Any], rp: Any, cache: dict[str, list[float]]):
+    """Return (clips, worst_overrun) or raise voice.VoiceUnavailable."""
+    lines = voice.narration_lines(rp.captions, plan, rp.title_d, rp.duration - tl.END_D)
+    voice_id = voice.DEFAULT_VOICE if st["voice"] == "auto" else st["voice"]
+    clips_audio = []
+    for ln in lines:
+        key = f"{voice_id}|{st['voice_speed']}|{ln['text']}"
+        if key not in cache:
+            cache[key] = voice.synth(ln["text"], voice_id, st["voice_speed"])
+        clips_audio.append(cache[key])
+    durs = [len(c) / voice.SR_OUT for c in clips_audio]
+    starts, worst = voice.schedule(lines, durs)
+    title_need = None
+    if lines and lines[0]["a"] < 1.0 and rp.captions:
+        title_need = lines[0]["a"] + durs[0] + 0.25  # title card should outlast its line
+    return list(zip(starts, clips_audio)), worst, voice_id, title_need
 
 
 def render_parallel(ctx_path: Path, n_frames: int, out: Path, workdir: Path, workers: int | None = None) -> None:
@@ -101,10 +134,41 @@ def edit(job: dict[str, Any], job_dir: Path, style: dict[str, Any] | None = None
     outputs: dict[str, Any] = {}
     formats = [st["format"]] + (["vertical"] if st["vertical"] and st["format"] != "vertical" else [])
     t_start = time.time()
+    narration_note = None
+    vcache: dict[str, list[float]] = {}
+    voice_id = None
     for fmt in formats:
         W, H = FORMATS[fmt]
-        rp = tl.build(events, plan, W, H, st["fps"], speed=st["speed"], dwell_rate=st["dwell_rate"],
+        dwell_rate = st["dwell_rate"]
+        rp = tl.build(events, plan, W, H, st["fps"], speed=st["speed"], dwell_rate=dwell_rate,
                       zoom=st["zoom"], max_seconds=st["max_seconds"])
+        clips = None
+        if st["voice"] and narration_note is None:
+            if st["voice"] == "auto" and not voice.installed():
+                narration_note = "no narration: install the optional kokoro-onnx package to enable it"
+            else:
+                try:
+                    title_d = tl.TITLE_D
+                    for _ in range(5):
+                        clips, worst, voice_id, title_need = _narrate(st, plan, rp, vcache)
+                        if title_need and title_need > title_d + 0.05 and title_d < 6.0:
+                            # let the title card hold until its line finishes
+                            title_d = min(6.0, title_need)
+                            rp = tl.build(events, plan, W, H, st["fps"], speed=st["speed"], dwell_rate=dwell_rate,
+                                          zoom=st["zoom"], max_seconds=st["max_seconds"], title_d=title_d)
+                            continue
+                        if worst <= 0.9 or dwell_rate <= 0.55:
+                            break
+                        # give the narration room: hold each shot a little longer and rebuild
+                        dwell_rate = max(0.5, dwell_rate * 0.8)
+                        rp = tl.build(events, plan, W, H, st["fps"], speed=st["speed"], dwell_rate=dwell_rate,
+                                      zoom=st["zoom"], max_seconds=st["max_seconds"], title_d=title_d)
+                except voice.VoiceUnavailable as exc:
+                    narration_note = str(exc)
+                    clips = None
+                except Exception as exc:  # noqa: BLE001 - narration must never break a render
+                    narration_note = f"narration skipped: {exc.__class__.__name__}: {str(exc)[:160]}"
+                    clips = None
         ctx = {
             "plan": asdict(rp),
             "frames_dir": str(cap / "frames"),
@@ -128,7 +192,11 @@ def edit(job: dict[str, Any], job_dir: Path, style: dict[str, Any] | None = None
         if st["sound"] == "clicks":
             sw = [max(0.0, x - 0.05) for x in rp.xfades_out]  # soft swoosh under page cross-fades
             sfx = audio.synth_track(out_dir / f"sfx_{fmt}.wav", rp.duration, rp.clicks_out, rp.keys_out, sw)
-        r = ff.run(ff.mux_cmd(str(silent), sfx, str(final), rp.duration, music=st["music"]))
+        vo_wav = None
+        if clips:
+            vo_wav = str(voice.write_track(out_dir / f"voice_{fmt}.wav", rp.duration, clips))
+        r = ff.run(ff.mux_cmd(str(silent), sfx, str(final), rp.duration, music=st["music"],
+                              voice_wav=vo_wav, music_db=st["music_volume"]))
         if r.returncode != 0:
             raise RuntimeError("mux failed: " + r.stderr.decode(errors="replace")[-400:])
         silent.unlink(missing_ok=True)
@@ -141,12 +209,20 @@ def edit(job: dict[str, Any], job_dir: Path, style: dict[str, Any] | None = None
             "caption_spans": [[c["a"], c["b"]] for c in rp.captions],
             "speed": rp.speed,
             "frames": len(rp.frames),
+            "narrated": bool(clips),
+            "title_d": rp.title_d,
         }
     main = outputs[formats[0]]["path"]
     return {
         "main": main,
         "outputs": outputs,
-        "style": st,
+        "style": {**st, "music": "default" if st["music"] == str(DEFAULT_MUSIC) else (st["music"] or "none")},
         "theme": {"background": th.rgb_to_hex(theme["bg"]), "accent": th.rgb_to_hex(theme["accent"])},
         "render_seconds": round(time.time() - t_start, 1),
+        "audio": {
+            "music": ("bundled bed (MIT, generated by Ship Reel)" if st["music"] == str(DEFAULT_MUSIC)
+                      else st["music"]) or "none",
+            "voice": (voice_id if any(o.get("narrated") for o in outputs.values()) else "none"),
+            "note": narration_note,
+        },
     }

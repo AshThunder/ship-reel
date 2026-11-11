@@ -50,12 +50,27 @@ def strip_emoji(text: str) -> str:
 
 
 def clean_caption(text: str | None) -> str:
-    t = strip_emoji(str(text or ""))
-    t = t.strip(" \"'")
+    t = strip_emoji(str(text or "")).strip()
+    while len(t) >= 2 and t[0] == t[-1] and t[0] in "\"'":
+        t = t[1:-1].strip()
+    if t.count('"') % 2:
+        t = t.replace('"', "")
+    if t.count("'") % 2 and re.search(r"(^|\s)'|'(\s|$)", t):
+        t = re.sub(r"(^|\s)'|'(\s|$)", lambda m: m.group(1) or m.group(2), t)
     if len(t) > CAPTION_MAX:
         cut = t[:CAPTION_MAX].rsplit(" ", 1)[0].rstrip(",;:-")
         t = cut
     return t
+
+
+MECHANICAL_RE = re.compile(
+    r"^(click(ing)?|tap|scroll(ing)?( down| up)?( to)?|hover(ing)?( over)?|press(ing)?|open(ing)?|clos(e|ing)|"
+    r"navigat(e|ing)( to)?|go(ing)? to|typ(e|ing)|select(ing)?|wait(ing)?( for)?)\b", re.I)
+
+
+def mechanical_caption(text: str) -> bool:
+    """True for captions that narrate the cursor ('Scroll to Pricing') instead of the product."""
+    return bool(text and MECHANICAL_RE.match(text.strip()))
 
 
 def check_url(url: str) -> str:
@@ -147,7 +162,15 @@ def normalize_step(raw: Any, index: int, allow_risky: bool = False) -> tuple[dic
             step["timelapse"] = bool(raw.get("timelapse", True))
 
     step["caption"] = clean_caption(raw.get("caption") or raw.get("label") or raw.get("narration"))
-    if not step["caption"]:
+    if raw.get("say"):
+        say = strip_emoji(str(raw["say"]))[:160]
+        if say:
+            step["say"] = say
+    if step["action"] == "press" and step["caption"] and mechanical_caption(step["caption"]):
+        step["caption"] = ""  # utility keys (Escape, Tab) get no caption of their own
+    elif not step["caption"] and step["action"] == "press":
+        pass
+    elif not step["caption"]:
         step["caption"] = clean_caption(_auto_caption(step))
         if action not in ("wait", "press", "hover"):
             warnings.append(f"step {index + 1}: no caption given, generated {step['caption']!r}")

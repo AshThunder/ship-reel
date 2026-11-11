@@ -286,6 +286,7 @@ class RenderPlan:
     layout: dict[str, Any]
     frames: list[dict[str, Any]] = field(default_factory=list)
     captions: list[dict[str, Any]] = field(default_factory=list)
+    title_d: float = TITLE_D
     clicks_out: list[float] = field(default_factory=list)
     keys_out: list[float] = field(default_factory=list)
     duration: float = 0.0
@@ -326,12 +327,12 @@ def zoom_windows(events: dict[str, Any], plan_steps: list[dict[str, Any]]) -> li
 
 def build(events: dict[str, Any], plan: dict[str, Any], W: int = 1920, H: int = 1080, fps: int = 30,
           speed: float = 1.0, dwell_rate: float = 1.0, zoom: bool = True,
-          max_seconds: float = MAX_SECONDS) -> RenderPlan:
+          max_seconds: float = MAX_SECONDS, title_d: float = TITLE_D) -> RenderPlan:
     L = make_layout(W, H, *events.get("viewport", [1440, 810]))
     plan_steps = plan.get("steps", [])
 
     # Fit the body into the time budget: speed up dwell first, then everything.
-    budget = max_seconds - (TITLE_D + INTRO_D + OUTRO_D + END_D)
+    budget = max_seconds - (title_d + INTRO_D + OUTRO_D + END_D)
     segs = build_segments(events, dwell_rate, speed)
     body = body_length(segs)
     if body > budget:
@@ -362,10 +363,10 @@ def build(events: dict[str, Any], plan: dict[str, Any], W: int = 1920, H: int = 
                 cur = u
         return url_list.index(cur) if cur in url_list else 0
 
-    body_start = TITLE_D + INTRO_D
+    body_start = title_d + INTRO_D
     total = body_start + body + OUTRO_D + END_D
     rp = RenderPlan(fps=fps, W=W, H=H, layout=L.__dict__.copy(), duration=round(total, 3), body=round(body, 3),
-                    speed=round(speed, 3), urls=url_list)
+                    speed=round(speed, 3), urls=url_list, title_d=title_d)
 
     # captions (output time)
     ok_steps = [st for st in events.get("steps", []) if st.get("ok")]
@@ -374,7 +375,10 @@ def build(events: dict[str, Any], plan: dict[str, Any], W: int = 1920, H: int = 
         text = (plan_steps[st["index"]] if st["index"] < len(plan_steps) else {}).get("caption") or st.get("caption")
         if not text:
             continue
-        a = body_start + out_of_src(segs, st["t_start"])
+        # captions that describe where a step lands (anchor scrolls, route changes, scroll
+        # targets) appear as the view settles, with a short lead, not when the cursor sets off
+        tc = st.get("t_caption", st["t_start"])
+        a = body_start + max(out_of_src(segs, st["t_start"]), out_of_src(segs, max(st["t_start"], tc - 0.3)))
         b = body_start + out_of_src(segs, st["t_end"])
         caps.append({"text": text, "a": a, "b": b, "n": len(caps) + 1})
     for i, c in enumerate(caps):  # close gaps so captions hand over cleanly
@@ -402,9 +406,9 @@ def build(events: dict[str, Any], plan: dict[str, Any], W: int = 1920, H: int = 
     for fi in range(n_frames):
         t = fi * dt
         fr: dict[str, Any] = {"t": round(t, 4)}
-        if t < TITLE_D:
+        if t < title_d:
             fr["phase"] = "title"
-            fr["title_a"] = 1.0 if t < TITLE_D - 0.45 else 1 - _smooth((t - (TITLE_D - 0.45)) / 0.45)
+            fr["title_a"] = 1.0 if t < title_d - 0.45 else 1 - _smooth((t - (title_d - 0.45)) / 0.45)
             fr["title_a"] *= _smooth(t / 0.35)
             rp.frames.append(fr)
             continue
@@ -426,9 +430,9 @@ def build(events: dict[str, Any], plan: dict[str, Any], W: int = 1920, H: int = 
             if sg_now.rate >= 2.4 * speed:
                 fr["ff"] = round(sg_now.rate, 1)
         if t < body_start:
-            p = ease_out_cubic((t - TITLE_D) / INTRO_D)
+            p = ease_out_cubic((t - title_d) / INTRO_D)
             fr["phase"] = "intro"
-            fr["win_a"] = round(_smooth((t - TITLE_D) / (INTRO_D * 0.7)), 4)
+            fr["win_a"] = round(_smooth((t - title_d) / (INTRO_D * 0.7)), 4)
             fr["win_s"] = round(0.9 + 0.1 * p, 5)
             fr["win_dy"] = round((1 - p) * H * 0.05, 2)
         elif t >= body_start + body:
