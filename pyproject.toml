@@ -1,0 +1,11 @@
+[project]
+name = "ship-reel"
+version = "0.1.0"
+description = "Hermes Agent plugin: URL + brief -> polished, verified product demo reel"
+requires-python = ">=3.11"
+license = "MIT"
+dependencies = [
+    "playwright>=1.44,<2",
+    "Pillow>=10.1,<14",
+]
+

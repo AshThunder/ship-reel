@@ -1,0 +1,31 @@
+# Draft entry for the Hermes plugin catalog. Replace sha with the full 40-char commit
+# of the tagged release before opening the catalog PR.
+name: ship-reel
+repo: https://github.com/AshThunder/ship-reel
+sha: "0000000000000000000000000000000000000000"
+version: "0.1.0"
+category: tools
+author: Chris Gold
+license: MIT
+requires_hermes: ">=0.21.5"
+description: >-
+  Turns a URL and a one-line brief into a finished product demo reel: plans and
+  dry-runs a shot list, records it in headless Chromium, edits it with auto-zoom,
+  cursor, captions and title cards into 16:9 and 9:16 MP4s, verifies and fixes
+  the result, and drafts (never posts) the accompanying post.
+provides_tools:
+  - plan_reel
+  - record_reel
+  - edit_reel
+  - verify_reel
+  - fix_reel
+  - list_reels
+  - reel_status
+  - draft_post
+requires_env: []
+disclosures:
+  network: Opens the user-supplied URL and pages in its shot list in headless Chromium. No telemetry.
+  subprocess: Runs ffmpeg/ffprobe and local render worker processes.
+  filesystem: Writes only to the plugin data directory (or SHIP_REEL_HOME).
+  browser_actions: Refuses sign-up, login, payment, submit, delete and wallet clicks unless allow_risky is set; never enters credentials.
+  publishing: None. draft_post returns text only.

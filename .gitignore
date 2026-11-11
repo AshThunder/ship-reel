@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+samples/*.mp4
+samples/work/
+.venv/
+samples/*.png
